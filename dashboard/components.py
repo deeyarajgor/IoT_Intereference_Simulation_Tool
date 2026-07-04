@@ -5,35 +5,50 @@ from .styles import COLORS, CARD, SMALL_CARD, LAYOUT, BUTTON_GREEN, BUTTON_OUTLI
 
 
 def svg_icon(name, color=None, size=24):
-    """Small inline SVG icons as data-uri images.
+    """Render professional Tabler icons using dash-iconify.
 
-    Dash's html module does not expose SVG child elements such as Path/Circle,
-    so we render the SVG as an <img> data URI instead. This keeps the dashboard
-    dependency-free and avoids emoji-style icons.
+    Install once: pip install dash-iconify
     """
-    from urllib.parse import quote
-
     color = color or COLORS["primary"]
-    stroke = color.replace("#", "%23")
-    icons = {
-        "wifi": '<path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M12 20h.01"/>',
-        "bluetooth": '<path d="M7 7l10 10-5 5V2l5 5L7 17"/>',
-        "router": '<rect x="4" y="11" width="16" height="7" rx="2"/><path d="M8 11V7"/><path d="M16 11V7"/><path d="M9 15h.01"/><path d="M13 15h2"/>',
-        "camera": '<rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3"/><path d="M8 7l1.5-2h5L16 7"/>',
-        "temp": '<path d="M14 14.76V5a4 4 0 1 0-8 0v9.76a6 6 0 1 0 8 0z"/><path d="M10 9v7"/>',
-        "bulb": '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M8 14a6 6 0 1 1 8 0c-1 1-1.5 2-1.5 3h-5C9.5 16 9 15 8 14z"/>',
-        "door": '<path d="M6 21V3h12v18"/><path d="M10 12h.01"/>',
-        "lock": '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
-        "hub": '<circle cx="12" cy="12" r="3"/><circle cx="5" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M7 7l3 3"/><path d="M17 7l-3 3"/><path d="M7 17l3-3"/><path d="M17 17l-3-3"/>',
-        "plug": '<path d="M8 2v6"/><path d="M16 2v6"/><path d="M7 8h10v4a5 5 0 0 1-10 0V8z"/><path d="M12 17v5"/>',
-        "motion": '<path d="M5 12a7 7 0 0 1 14 0"/><path d="M8 12a4 4 0 0 1 8 0"/><path d="M12 12h.01"/><path d="M4 20l16-16"/>',
-        "warning": '<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
-        "signal": '<path d="M2 20h3"/><path d="M8 20h3V10H8z"/><path d="M14 20h3V6h-3z"/><path d="M20 20h2V3h-2z"/>',
-        "database": '<path d="M4 6c0-2 16-2 16 0s-16 2-16 0"/><path d="M4 6v12c0 2 16 2 16 0V6"/><path d="M4 12c0 2 16 2 16 0"/>',
+    icon_map = {
+        "wifi": "tabler:wifi",
+        "bluetooth": "tabler:bluetooth",
+        "router": "tabler:router",
+        "camera": "tabler:camera",
+        "temp": "tabler:temperature",
+        "bulb": "tabler:bulb",
+        "door": "tabler:door",
+        "lock": "tabler:lock",
+        "hub": "tabler:server",
+        "plug": "tabler:plug",
+        "motion": "tabler:radar",
+        "warning": "tabler:alert-triangle",
+        "signal": "tabler:activity",
+        "database": "tabler:database",
+        "download": "tabler:download",
+        "switch": "tabler:arrows-exchange",
+        "healthy": "tabler:circle-check",
+        "degraded": "tabler:alert-circle",
     }
-    body = icons.get(name, icons["signal"])
-    svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="{stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{body}</svg>'
-    return html.Img(src="data:image/svg+xml," + quote(svg), style={"width": f"{size}px", "height": f"{size}px", "display": "block"})
+    try:
+        from dash_iconify import DashIconify
+        return DashIconify(
+            icon=icon_map.get(name, "tabler:activity"),
+            width=size,
+            height=size,
+            color=color,
+            style={"display": "block"},
+        )
+    except Exception:
+        # Fallback so the dashboard does not crash if dash-iconify is not installed yet.
+        fallback = {
+            "wifi": "Wi-Fi", "bluetooth": "BT", "router": "Router",
+            "camera": "Cam", "temp": "Temp", "bulb": "Bulb",
+            "door": "Door", "lock": "Lock", "hub": "Hub",
+            "plug": "Plug", "motion": "Motion", "database": "DB",
+            "signal": "Sim", "warning": "!",
+        }.get(name, "•")
+        return html.Span(fallback, style={"fontSize": f"{max(10, size//2)}px", "fontWeight": "900", "color": color})
 
 
 def card(children, style=None):
