@@ -64,3 +64,28 @@ BUTTON_OUTLINE = {
     "fontWeight": "800",
     "cursor": "pointer",
 }
+WAVES = {
+    "position": "absolute",
+    "left": "50%",
+    "transform": "translateX(-50%)",
+    "border": "2px solid rgba(255,255,255,0.25)",
+    "borderRadius": "50%",
+}
+
+WAVE1 = {
+    **WAVES,
+    "width": "60px",
+    "height": "20px",
+}
+
+WAVE2 = {
+    **WAVES,
+    "width": "120px",
+    "height": "40px",
+}
+
+WAVE3 = {
+    **WAVES,
+    "width": "180px",
+    "height": "60px",
+}

@@ -1,6 +1,12 @@
 # dashboard/components.py
 
 from dash import html, dcc
+
+try:
+    from dash_iconify import DashIconify
+except Exception:
+    DashIconify = None
+
 from .styles import COLORS, CARD, SMALL_CARD, LAYOUT, BUTTON_GREEN, BUTTON_OUTLINE, BUTTON_PRIMARY
 
 
@@ -30,8 +36,7 @@ def svg_icon(name, color=None, size=24):
         "healthy": "tabler:circle-check",
         "degraded": "tabler:alert-circle",
     }
-    try:
-        from dash_iconify import DashIconify
+    if DashIconify is not None:
         return DashIconify(
             icon=icon_map.get(name, "tabler:activity"),
             width=size,
@@ -39,16 +44,16 @@ def svg_icon(name, color=None, size=24):
             color=color,
             style={"display": "block"},
         )
-    except Exception:
-        # Fallback so the dashboard does not crash if dash-iconify is not installed yet.
-        fallback = {
+
+    # Fallback so the dashboard does not crash if dash-iconify is not installed yet.
+    fallback = {
             "wifi": "Wi-Fi", "bluetooth": "BT", "router": "Router",
             "camera": "Cam", "temp": "Temp", "bulb": "Bulb",
             "door": "Door", "lock": "Lock", "hub": "Hub",
             "plug": "Plug", "motion": "Motion", "database": "DB",
             "signal": "Sim", "warning": "!",
         }.get(name, "•")
-        return html.Span(fallback, style={"fontSize": f"{max(10, size//2)}px", "fontWeight": "900", "color": color})
+    return html.Span(fallback, style={"fontSize": f"{max(10, size//2)}px", "fontWeight": "900", "color": color})
 
 
 def card(children, style=None):

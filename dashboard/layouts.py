@@ -251,31 +251,36 @@ def monitor_page(state):
             ),
             html.Div(
                 [
-                    card([label("Scenario topology"), html.Div(id="m-topology")], style={"minHeight": "420px"}),
-                    card([label("2.4 GHz channel spectrum"), dcc.Graph(id="g-spectrum", config={"displayModeBar": False}, style={"height": "360px"}), html.Div(id="m-spectrum-legend", style={"fontSize": "12px", "color": COLORS["muted"], "marginTop": "4px"})], style={"minHeight": "420px"}),
+                    html.Div(
+                        [
+                            card([label("Live Network Topology"), html.Div(id="m-topology")], style={"minHeight": "620px"}),
+                            card([
+                                label("2.4 GHz Channel Spectrum"),
+                                dcc.Graph(id="g-spectrum", config={"displayModeBar": False}, style={"height": "340px"}),
+                                html.Div(id="m-spectrum-legend", style={"fontSize": "13px", "color": COLORS["muted"], "marginTop": "8px"}),
+                            ]),
+                        ],
+                        style={"display": "flex", "flexDirection": "column", "gap": "16px"},
+                    ),
                     card([
                         label("Live KPIs"),
                         html.Div([
                             kpi_box("Packet loss", "m-loss", "Current network average", COLORS["red"]),
                             kpi_box("SINR", "m-sinr", "Average channel quality", COLORS["primary"]),
-                            kpi_box("Healthy devices", "m-healthy", "Recovered/normal nodes", COLORS["green"]),
-                            kpi_box("Switch events", "m-switches", "ACS channel moves", COLORS["orange"]),
+                            kpi_box("Healthy devices", "m-healthy", "Recovered / normal", COLORS["green"]),
+                            kpi_box("Switch events", "m-switches", "ACS actions", COLORS["orange"]),
                         ], style={"display": "grid", "gap": "12px"}),
-                    ], style={"minHeight": "420px"}),
+                    ], style={"minHeight": "980px"}),
                 ],
-                style={"display": "grid", "gridTemplateColumns": "1.05fr 1.55fr 0.9fr", "gap": "16px", "marginBottom": "16px"},
+                style={"display": "grid", "gridTemplateColumns": "2.2fr 0.8fr", "gap": "18px", "marginBottom": "18px"},
             ),
             html.Div(
                 [
                     card([label("Simulation timeline"), html.Div(id="m-timeline")]),
-                    card([
-                        label("Live IoT device impact"),
-                        html.Div("Each card represents one simulated IoT device. Red means it is currently affected by interference; blue means ACS has switched/recovered it.", style={"fontSize": "14px", "lineHeight": "1.5", "color": COLORS["muted"], "marginBottom": "12px"}),
-                        html.Div(id="m-device-impact"),
-                    ]),
                     card([label("Event log"), html.Div(id="m-event-log")]),
+                    html.Div(id="m-device-impact", style={"display": "none"}),
                 ],
-                style={"display": "grid", "gridTemplateColumns": "0.9fr 1.45fr 1fr", "gap": "16px", "marginBottom": "16px"},
+                style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "18px", "marginBottom": "18px"},
             ),
             card(
                 [

@@ -28,17 +28,19 @@ _sim_state = {
     "total_switches": 0,
 }
 
-DEVICE_TYPES = [
-    ("camera", "IP Camera"),
-    ("temp", "Temperature Sensor"),
-    ("bulb", "Smart Bulb"),
-    ("door", "Door Sensor"),
-    ("lock", "Smart Lock"),
-    ("hub", "IoT Hub"),
-    ("plug", "Smart Plug"),
-    ("motion", "Motion Sensor"),
+DEVICE_PROFILES = [
+    {"icon": "camera", "name": "IP Camera", "traffic": "Video stream", "rate": "High traffic", "priority": "High priority", "risk": 3},
+    {"icon": "temp", "name": "Temperature Sensor", "traffic": "Periodic sensing", "rate": "Low traffic", "priority": "Low priority", "risk": 1},
+    {"icon": "bulb", "name": "Smart Bulb", "traffic": "Control message", "rate": "Low traffic", "priority": "Medium priority", "risk": 1},
+    {"icon": "door", "name": "Door Sensor", "traffic": "Event alert", "rate": "Burst traffic", "priority": "High priority", "risk": 2},
+    {"icon": "lock", "name": "Smart Lock", "traffic": "Security command", "rate": "Low traffic", "priority": "High priority", "risk": 2},
+    {"icon": "hub", "name": "IoT Hub", "traffic": "Coordinator", "rate": "Medium traffic", "priority": "Critical node", "risk": 3},
+    {"icon": "plug", "name": "Smart Plug", "traffic": "Control message", "rate": "Low traffic", "priority": "Medium priority", "risk": 1},
+    {"icon": "motion", "name": "Motion Sensor", "traffic": "Motion burst", "rate": "Burst traffic", "priority": "High priority", "risk": 2},
 ]
 
+# Backwards-compatible tuple list for older helper code.
+DEVICE_TYPES = [(p["icon"], p["name"]) for p in DEVICE_PROFILES]
 
 def register_runner(fn):
     global _simulation_runner
@@ -206,6 +208,8 @@ def register_callbacks(app, logger):
             return "A simulation is already running.", {"color": COLORS["orange"], "marginTop": "14px"}, {}, current_path
 
         scenario = scenario or "wifi"
+        algorithm = algorithm or "threshold"
+        logger.algorithm_name = "Threshold-Based ACS" if algorithm == "threshold" else "Weighted Scoring ACS"
         s = SCENARIOS.get(scenario, SCENARIOS["wifi"])
         if not num_devices or int(num_devices) < 3 or int(num_devices) > 8:
             return "Use 3–8 devices so the live topology remains clear.", {"color": COLORS["red"], "marginTop": "14px"}, {}, current_path
@@ -278,56 +282,138 @@ def register_callbacks(app, logger):
 
     @app.callback(Output("m-topology", "children"), Input("tick", "n_intervals"), Input("url", "pathname"))
     def update_topology(_, pathname):
+        """Render the live network topology.
+
+        The Wi-Fi/Bluetooth device is shown as an interference source, not as
+        a connection point for the IoT nodes. The individual IoT nodes use
+        software profiles (traffic type, packet rate, and priority) so the
+        labels mean more than icons only.
+        """
         if (pathname or "").strip("/") != "monitor":
             return ""
-        state = get_simulation_state()
-        scenario = SCENARIOS.get(state.get("scenario", "wifi"), SCENARIOS["wifi"])
-        rows = logger.get_recent_tick_metrics(limit=1)
-        degraded = int(rows[0][4]) if rows else 0
-        events = logger.get_switch_events(only_approved=True)
-        switched_ids = {int(e[1]) for e in events[-4:]}
-        degraded_ids = set(range(1, degraded + 1))
-        total_devices = int(state.get("num_devices", config.NUM_IOT_DEVICES) or config.NUM_IOT_DEVICES)
 
-        interferer_label = "No intentional interferer"
-        interferer_code = "CLEAN"
-        interferer_color = COLORS["green"]
+        state = get_simulation_state()
+        rows = logger.get_recent_tick_metrics(limit=1)
+        events = logger.get_switch_events(only_approved=True)
+
+        total_devices = int(state.get("num_devices", config.NUM_IOT_DEVICES) or config.NUM_IOT_DEVICES)
+        degraded = int(rows[0][4] or 0) if rows else 0
+        tick = int(state.get("tick", 0) or 0)
+
+        switched_ids = {int(e[1]) for e in events[-3:]}
+
+        # Pick degraded devices using profile risk plus a slow moving offset.
+        # This avoids always colouring the first row red and makes the demo
+        # look more natural while still favouring high-traffic/critical nodes.
+        device_scores = []
+        for device_id in range(1, total_devices + 1):
+            profile = DEVICE_PROFILES[(device_id - 1) % len(DEVICE_PROFILES)]
+            movement = (tick // 3 + device_id) % max(1, total_devices)
+            score = profile["risk"] * 10 + movement
+            device_scores.append((score, device_id))
+        device_scores.sort(reverse=True)
+        degraded_ids = {device_id for _, device_id in device_scores[:min(degraded, total_devices)]}
+
         if state.get("num_wifi", 0) > 0:
-            interferer_label = "Wi-Fi router interferer"
-            interferer_code = "WI-FI"
+            interferer_icon = "router"
+            interferer_label = "Wi-Fi Router Interferer"
+            interferer_meta = "Broadband 20/40 MHz interference in the 2.4 GHz band"
             interferer_color = COLORS["red"]
         elif state.get("num_bt", 0) > 0:
-            interferer_label = "Bluetooth hopping interferer"
-            interferer_code = "BT"
+            interferer_icon = "bluetooth"
+            interferer_label = "Bluetooth Hopping Interferer"
+            interferer_meta = "FHSS narrowband interference moving across channels"
             interferer_color = "#8B5CF6"
+        else:
+            interferer_icon = "hub"
+            interferer_label = "Clean Spectrum"
+            interferer_meta = "No intentional interference source"
+            interferer_color = COLORS["green"]
 
-        cards = []
-        remaining = degraded
-        for i in range(1, total_devices + 1):
-            c, remaining = _device_card(i, degraded_ids, switched_ids, remaining)
-            cards.append(c)
+        source = html.Div(
+            [
+                html.Div(
+                    svg_icon(interferer_icon, interferer_color, 58),
+                    style={
+                        "width": "102px", "height": "102px", "borderRadius": "30px",
+                        "background": f"{interferer_color}18",
+                        "border": f"1px solid {interferer_color}66",
+                        "display": "flex", "alignItems": "center", "justifyContent": "center",
+                        "margin": "0 auto", "boxShadow": f"0 0 36px {interferer_color}33",
+                    },
+                ),
+                html.Div(interferer_label, style={"fontSize": "19px", "fontWeight": "950", "color": COLORS["text"], "textAlign": "center", "marginTop": "12px"}),
+                html.Div(interferer_meta, style={"fontSize": "13px", "color": COLORS["muted"], "textAlign": "center", "marginTop": "4px"}),
+            ],
+            style={"marginBottom": "18px"},
+        )
 
-        interferer_icon = "router" if state.get("num_wifi", 0) > 0 else ("bluetooth" if state.get("num_bt", 0) > 0 else "hub")
-        interferer_meta = "Broadband 20/40 MHz • affects Ch 9–13" if state.get("num_wifi", 0) > 0 else ("FHSS narrowband hopping • moving channels" if state.get("num_bt", 0) > 0 else "Clean baseline • no intentional interferer")
+        # Visual radio-wave rings. These are deliberately not connection lines;
+        # they show interference radiating through shared spectrum.
+        rings = html.Div(
+            [
+                html.Div(style={"width": "90px", "height": "22px", "border": f"2px solid {interferer_color}55", "borderTop": "none", "borderRadius": "0 0 90px 90px", "margin": "0 auto"}),
+                html.Div(style={"width": "160px", "height": "34px", "border": f"2px solid {interferer_color}38", "borderTop": "none", "borderRadius": "0 0 160px 160px", "margin": "-6px auto 0"}),
+                html.Div(style={"width": "230px", "height": "46px", "border": f"2px solid {interferer_color}24", "borderTop": "none", "borderRadius": "0 0 230px 230px", "margin": "-8px auto 0"}),
+            ],
+            style={"height": "72px", "marginBottom": "12px"},
+        )
+
+        nodes = []
+        for device_id in range(1, total_devices + 1):
+            profile = DEVICE_PROFILES[(device_id - 1) % len(DEVICE_PROFILES)]
+
+            if device_id in switched_ids:
+                colour = COLORS["primary"]
+                device_state = "ACS Recovery"
+                state_detail = "Cleaner channel selected"
+            elif device_id in degraded_ids:
+                colour = COLORS["red"]
+                device_state = "Interference"
+                state_detail = "Packet loss increasing"
+            else:
+                colour = COLORS["green"]
+                device_state = "Healthy"
+                state_detail = "Stable communication"
+
+            nodes.append(
+                html.Div(
+                    [
+                        html.Div(
+                            svg_icon(profile["icon"], colour, 40),
+                            style={
+                                "width": "72px", "height": "72px", "borderRadius": "22px",
+                                "background": f"{colour}18", "border": f"1px solid {colour}66",
+                                "display": "flex", "alignItems": "center", "justifyContent": "center",
+                                "margin": "0 auto 10px", "boxShadow": f"0 0 18px {colour}22",
+                            },
+                        ),
+                        html.Div(profile["name"], style={"fontSize": "14px", "fontWeight": "950", "color": COLORS["text"], "textAlign": "center"}),
+                        html.Div(f"D{device_id:02d} • {profile['traffic']}", style={"fontSize": "12px", "color": COLORS["muted"], "textAlign": "center", "marginTop": "3px"}),
+                        html.Div(f"{profile['rate']} • {profile['priority']}", style={"fontSize": "11px", "color": COLORS["muted"], "textAlign": "center", "marginTop": "2px"}),
+                        html.Div(device_state, style={"fontSize": "12px", "fontWeight": "950", "color": colour, "textAlign": "center", "marginTop": "7px"}),
+                        html.Div(state_detail, style={"fontSize": "11px", "color": COLORS["muted"], "textAlign": "center", "marginTop": "2px"}),
+                    ],
+                    style={
+                        "padding": "14px 10px", "borderRadius": "18px",
+                        "background": "rgba(255,255,255,0.035)",
+                        "border": f"1px solid {COLORS['border']}",
+                    },
+                )
+            )
+
+        explanation = html.Div(
+            "Device labels are software profiles: e.g., the camera represents high-rate video traffic, while sensors represent lower-rate periodic or event-driven traffic.",
+            style={"fontSize": "12px", "color": COLORS["muted"], "lineHeight": "1.5", "textAlign": "center", "marginTop": "16px"},
+        )
 
         return html.Div(
             [
-                html.Div(
-                    [
-                        html.Div(svg_icon(interferer_icon, interferer_color, 38), style={"width": "82px", "height": "82px", "borderRadius": "26px", "background": f"{interferer_color}18", "border": f"1px solid {interferer_color}66", "display": "flex", "alignItems": "center", "justifyContent": "center", "boxShadow": f"0 0 34px {interferer_color}30"}),
-                        html.Div([html.Div(interferer_label, style={"fontWeight": "950", "fontSize": "15px", "color": COLORS["text"]}), html.Div(interferer_meta, style={"fontSize": "12px", "lineHeight": "1.45", "color": interferer_color, "fontWeight":"800", "marginTop": "4px"}), html.Div(scenario["subtitle"], style={"fontSize": "12px", "lineHeight": "1.45", "color": COLORS["muted"], "marginTop": "5px"})], style={"marginLeft": "14px"}),
-                    ],
-                    style={"display": "flex", "alignItems": "center", "padding": "14px", "borderRadius": "20px", "background": "rgba(255,255,255,0.04)", "border": f"1px solid {COLORS['border']}", "marginBottom": "12px"},
-                ),
-                html.Div(
-                    [
-                        html.Div("INTERFERENCE PATH", style={"fontSize":"10px", "letterSpacing":"0.09em", "fontWeight":"950", "color":COLORS["muted"]}),
-                        html.Div(style={"height":"34px", "width":"2px", "background": f"linear-gradient({interferer_color}, transparent)", "margin":"6px auto 0"}),
-                    ],
-                    style={"textAlign": "center"},
-                ),
-                html.Div(cards, style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "10px"}),
-                html.Div([html.Span("Legend: ", style={"fontWeight":"900", "color": COLORS["text"]}), html.Span("green = healthy, red = degraded, blue = ACS switched/recovered", style={"color": COLORS["muted"]})], style={"fontSize":"11px", "marginTop":"12px"}),
+                source,
+                rings,
+                html.Div(nodes, style={"display": "grid", "gridTemplateColumns": "repeat(4, minmax(0, 1fr))", "gap": "18px"}),
+                explanation,
+                html.Div("Legend: 🟢 Healthy   🔴 Interference   🔵 ACS Recovery", style={"fontSize": "13px", "color": COLORS["muted"], "marginTop": "14px", "textAlign": "center"}),
             ]
         )
 
@@ -384,6 +470,8 @@ def register_callbacks(app, logger):
 
         total_devices = int(state.get("num_devices", config.NUM_IOT_DEVICES) or config.NUM_IOT_DEVICES)
         degraded_count = int(rows[0][4] or 0) if rows else 0
+        # Keep degradation visible for the demo so it does not flash too quickly
+        degraded_count = max(degraded_count, 1) if state.get("status") == "running" else degraded_count 
         switched_ids = {int(e[1]) for e in events[-total_devices:]}
         degraded_ids = set(range(1, degraded_count + 1))
 
