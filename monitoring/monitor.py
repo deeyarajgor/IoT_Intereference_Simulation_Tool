@@ -65,6 +65,10 @@ class NetworkMonitor:
         # Key = device_id, Value = consecutive tick count
         # Reset to 0 whenever the device's channel becomes healthy again.
         self._consecutive_degraded_ticks: Dict[int, int] = {}
+        # Phase 2: delay ACS slightly after detection so the dashboard visibly shows
+        # Interference/Degraded before recovery begins.
+        self._acs_delay_ticks: Dict[int, int] = {}
+        self.acs_decision_delay_ticks = 2   # 2 ticks × 500 ms = 1 second delay
 
         # How many consecutive degraded ticks before we flag a device to ACS.
         # ACS_DETECTION_WINDOW_MS = 500ms, TICK_INTERVAL_MS = 100ms -> 5 ticks.
@@ -100,7 +104,7 @@ class NetworkMonitor:
         device_states = device_manager.get_all_devices()
 
         # Compute aggregate metrics
-        avg_loss = self._compute_average_packet_loss(device_states)
+        avg_loss = self._compute_average_packet_loss(device_states, environment)
         num_degraded_channels = sum(1 for ch in channel_states if ch.is_interfered)
         num_degraded_devices = sum(
             1 for d in device_states if d.status == DeviceStatus.DEGRADED
@@ -128,14 +132,20 @@ class NetworkMonitor:
         )
 
     # HELPER: AVERAGE PACKET LOSS
-    def _compute_average_packet_loss(self, devices: List[IoTDevice]) -> float:
+    def _compute_average_packet_loss(
+        self,
+        devices: List[IoTDevice],
+        environment: ChannelEnvironment
+    ) -> float:
         """
-        Average the CURRENT-TICK packet loss rate across all transmitting devices.
+        Compute the current live packet loss across active devices.
 
-        We use each device's channel's instantaneous packet_loss_rate here
-        (not the cumulative packets_lost/packets_sent), because for live
-        dashboard display we want to show "how bad is it RIGHT NOW",
-        not the all-time average which would be slow to react to changes.
+        Phase 2 change:
+        This uses the packet loss of each device's CURRENT channel instead
+        of the device's all-time cumulative packet loss.
+
+        This makes the dashboard respond immediately when interference starts
+        or when ACS recovery improves the channel.
         """
         active_devices = [
             d for d in devices
@@ -145,11 +155,21 @@ class NetworkMonitor:
         if not active_devices:
             return 0.0
 
-        # Each device's most recent SINR reading tells us its current channel quality; we convert that into "current loss" via the device's own
-        # cumulative rate as a stable estimate. For simplicity and to avoid importing environment's sigmoid function here, we use the device's
-        # running average loss rate so far this run.
-        losses = [d.packet_loss_rate() for d in active_devices]
-        return float(np.mean(losses))
+        live_losses = []
+
+        for device in active_devices:
+            channel = environment.get_channel(device.channel_id)
+
+            # Apply device sensitivity so high-traffic/sensitive devices
+            # are affected more than low-duty-cycle sensors.
+            adjusted_loss = min(
+                1.0,
+                channel.packet_loss_rate * device.sensitivity
+            )
+
+            live_losses.append(adjusted_loss)
+
+        return float(np.mean(live_losses))
 
     
     # HELPER: DEGRADATION TRACKING (implements the 500ms detection window)
@@ -184,19 +204,30 @@ class NetworkMonitor:
             channel = environment.get_channel(device.channel_id)
             current_count = self._consecutive_degraded_ticks.get(device.device_id, 0)
 
-            if channel.is_interfered:
-                # Channel is bad this tick -> increment the streak
+            device_loss = channel.packet_loss_rate * device.sensitivity
+
+            is_device_affected = (
+                channel.is_interfered
+                and device_loss >= 0.04
+            )
+
+            if is_device_affected:
                 current_count += 1
             else:
-                # Channel is healthy -> reset the streak to zero
                 current_count = 0
 
             self._consecutive_degraded_ticks[device.device_id] = current_count
 
             # Flag this device if it has been degraded long enough AND it's allowed to switch again (respects the cooldown in devices.py)
-            if (current_count >= self.detection_window_ticks
-                    and device.can_switch(current_tick)):
-                flagged_devices.append(device.device_id)
+            if current_count >= self.detection_window_ticks:
+                delay_count = self._acs_delay_ticks.get(device.device_id, 0)
+                delay_count += 1
+                self._acs_delay_ticks[device.device_id] = delay_count
+
+                if delay_count >= self.acs_decision_delay_ticks and device.can_switch(current_tick):
+                    flagged_devices.append(device.device_id)
+            else:
+                self._acs_delay_ticks[device.device_id] = 0
 
         return flagged_devices
 
@@ -210,3 +241,4 @@ class NetworkMonitor:
         channel rather than carrying over its old "degraded streak".
         """
         self._consecutive_degraded_ticks[device_id] = 0
+        self._acs_delay_ticks[device_id] = 0

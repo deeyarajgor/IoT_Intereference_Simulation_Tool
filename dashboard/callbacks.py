@@ -121,15 +121,15 @@ def _row_stat(label_text, value_text, meaning_text=None):
 
 def _device_card(idx, degraded_ids, switched_ids, degraded_remaining):
     icon_name, name = DEVICE_TYPES[(idx - 1) % len(DEVICE_TYPES)]
-    if idx in switched_ids:
-        status = "Recovered / switched"
-        color = COLORS["primary"]
-        ring = "0 0 0 4px rgba(47,128,255,0.12), 0 0 26px rgba(47,128,255,0.35)"
-    elif idx in degraded_ids or degraded_remaining > 0:
+    if idx in degraded_ids or degraded_remaining > 0:
         status = "Degraded"
         color = COLORS["red"]
         degraded_remaining -= 1
         ring = "0 0 0 4px rgba(255,77,90,0.12), 0 0 26px rgba(255,77,90,0.35)"
+    elif idx in switched_ids:
+        status = "Recovered / switched"
+        color = COLORS["primary"]
+        ring = "0 0 0 4px rgba(47,128,255,0.12), 0 0 26px rgba(47,128,255,0.35)"
     else:
         status = "Healthy"
         color = COLORS["green"]
@@ -298,9 +298,19 @@ def register_callbacks(app, logger):
 
         total_devices = int(state.get("num_devices", config.NUM_IOT_DEVICES) or config.NUM_IOT_DEVICES)
         degraded = int(rows[0][4] or 0) if rows else 0
+        # Keep interference visible briefly before/around ACS recovery.
+        # This prevents the UI from jumping directly from Healthy to ACS Recovery.
+        
         tick = int(state.get("tick", 0) or 0)
 
-        switched_ids = {int(e[1]) for e in events[-3:]}
+        # Only show ACS Recovery for recent switch events.
+        # Otherwise old switches make devices stay blue forever.
+        recent_window_ticks = 15
+        switched_ids = {
+            int(e[1])
+            for e in events
+            if tick - int(e[0]) <= recent_window_ticks
+        }
 
         # Pick degraded devices using profile risk plus a slow moving offset.
         # This avoids always colouring the first row red and makes the demo
@@ -312,7 +322,15 @@ def register_callbacks(app, logger):
             score = profile["risk"] * 10 + movement
             device_scores.append((score, device_id))
         device_scores.sort(reverse=True)
-        degraded_ids = {device_id for _, device_id in device_scores[:min(degraded, total_devices)]}
+                # Limit visible degraded devices so the topology does not show every
+        # device failing at the same time. This better represents mixed IoT
+        # behaviour under one Wi-Fi/Bluetooth scenario.
+        visible_degraded = min(degraded, max(1, total_devices // 2))
+
+        degraded_ids = {
+            device_id
+            for _, device_id in device_scores[:visible_degraded]
+        }
 
         if state.get("num_wifi", 0) > 0:
             interferer_icon = "router"
@@ -363,14 +381,14 @@ def register_callbacks(app, logger):
         for device_id in range(1, total_devices + 1):
             profile = DEVICE_PROFILES[(device_id - 1) % len(DEVICE_PROFILES)]
 
-            if device_id in switched_ids:
-                colour = COLORS["primary"]
-                device_state = "ACS Recovery"
-                state_detail = "Cleaner channel selected"
-            elif device_id in degraded_ids:
+            if device_id in degraded_ids:
                 colour = COLORS["red"]
                 device_state = "Interference"
                 state_detail = "Packet loss increasing"
+            elif device_id in switched_ids:
+                colour = COLORS["primary"]
+                device_state = "ACS Recovery"
+                state_detail = "Cleaner channel selected"
             else:
                 colour = COLORS["green"]
                 device_state = "Healthy"
@@ -471,9 +489,18 @@ def register_callbacks(app, logger):
         total_devices = int(state.get("num_devices", config.NUM_IOT_DEVICES) or config.NUM_IOT_DEVICES)
         degraded_count = int(rows[0][4] or 0) if rows else 0
         # Keep degradation visible for the demo so it does not flash too quickly
-        degraded_count = max(degraded_count, 1) if state.get("status") == "running" else degraded_count 
-        switched_ids = {int(e[1]) for e in events[-total_devices:]}
-        degraded_ids = set(range(1, degraded_count + 1))
+        # degraded_count = max(degraded_count, 1) if state.get("status") == "running" else degraded_count 
+        tick = int(state.get("tick", 0) or 0)
+        recent_window_ticks = 15
+
+        switched_ids = {
+            int(e[1])
+            for e in events
+            if tick - int(e[0]) <= recent_window_ticks
+        }
+        visible_degraded = min(degraded_count, max(1, total_devices // 2))
+        degraded_ids = set(range(1, visible_degraded + 1))
+        degraded_count = visible_degraded
 
         cards = []
         remaining = degraded_count

@@ -51,6 +51,77 @@ class DeviceStatus(Enum):
     SWITCHING   = "switching"
     DEGRADED    = "degraded"
 
+# REALISTIC IOT DEVICE PROFILES
+# These profiles help the simulation treat each device differently.
+# This is important for Phase 2 because an IP camera should not behave
+# the same way as a temperature sensor or smart bulb.
+
+DEVICE_PROFILES = [
+    {
+        "name": "IP Camera",
+        "traffic_type": "Video stream",
+        "traffic_load": "High traffic",
+        "priority": "High priority",
+        "packets_per_tick": 18,
+        "sensitivity": 0.90,
+    },
+    {
+        "name": "Temperature Sensor",
+        "traffic_type": "Periodic sensing",
+        "traffic_load": "Low traffic",
+        "priority": "Low priority",
+        "packets_per_tick": 4,
+        "sensitivity": 0.35,
+    },
+    {
+        "name": "Smart Bulb",
+        "traffic_type": "Control message",
+        "traffic_load": "Low traffic",
+        "priority": "Medium priority",
+        "packets_per_tick": 5,
+        "sensitivity": 0.45,
+    },
+    {
+        "name": "Door Sensor",
+        "traffic_type": "Event alert",
+        "traffic_load": "Burst traffic",
+        "priority": "High priority",
+        "packets_per_tick": 8,
+        "sensitivity": 0.75,
+    },
+    {
+        "name": "Smart Lock",
+        "traffic_type": "Security command",
+        "traffic_load": "Low traffic",
+        "priority": "High priority",
+        "packets_per_tick": 6,
+        "sensitivity": 0.80,
+    },
+    {
+        "name": "IoT Hub",
+        "traffic_type": "Coordinator",
+        "traffic_load": "Medium traffic",
+        "priority": "Critical node",
+        "packets_per_tick": 12,
+        "sensitivity": 0.85,
+    },
+    {
+        "name": "Smart Plug",
+        "traffic_type": "Control message",
+        "traffic_load": "Low traffic",
+        "priority": "Medium priority",
+        "packets_per_tick": 5,
+        "sensitivity": 0.45,
+    },
+    {
+        "name": "Motion Sensor",
+        "traffic_type": "Motion burst",
+        "traffic_load": "Burst traffic",
+        "priority": "High priority",
+        "packets_per_tick": 9,
+        "sensitivity": 0.80,
+    },
+]
 # IOT DEVICE
 
 @dataclass
@@ -70,8 +141,13 @@ class IoTDevice:
 
     device_id: int                        # Unique identifier (1 to NUM_IOT_DEVICES)
     channel_id: int                       # Current channel assignment (1–16)
-    tx_power_dbm: float                   # Transmit power in dBm (typically -50 dBm
-                                          # for a low-power IoT sensor)
+    tx_power_dbm: float                   # Transmit power in dBm (typically -50 dBm for a low-power IoT sensor)
+    name: str = "Generic IoT Device"
+    traffic_type: str = "Sensor data"
+    traffic_load: str = "Low traffic"
+    priority: str = "Medium priority"
+    packets_per_tick: int = 5
+    sensitivity: float = 0.5
 
     status: DeviceStatus = DeviceStatus.IDLE
 
@@ -153,20 +229,22 @@ class IoTDevice:
         # Clear SINR history — readings from the old channel are no longer relevant
         self.sinr_readings.clear()
 
-    def update_status(self, channel_sinr_db: float):
+    def update_status(self, channel_sinr_db: float, adjusted_loss_rate: float = 0.0):
         """
-        Update this device's status based on the current channel quality.
+        Update this device's status based on channel quality and device sensitivity.
 
-        Called every tick by monitor.py after SINR is recalculated.
-        Transitions the device between TRANSMITTING and DEGRADED states.
+        Phase 2:
+        Devices do not all degrade equally. A low-duty-cycle sensor should not
+        be affected as quickly as a high-traffic camera or motion sensor.
         """
-        # If device just switched, it comes back online after one tick
+
         if self.status == DeviceStatus.SWITCHING:
             self.status = DeviceStatus.TRANSMITTING
             return
 
+
         if self.status in (DeviceStatus.TRANSMITTING, DeviceStatus.DEGRADED):
-            if channel_sinr_db < config.SINR_THRESHOLD_DB:
+            if channel_sinr_db < config.SINR_THRESHOLD_DB and adjusted_loss_rate >= 0.08:
                 self.status = DeviceStatus.DEGRADED
             else:
                 self.status = DeviceStatus.TRANSMITTING
@@ -269,19 +347,33 @@ class DeviceManager:
 
     def _create_iot_devices(self):
         """
-        Spawn NUM_IOT_DEVICES IoT sensor nodes.
+        Spawn IoT devices using realistic profiles.
 
-        Each device starts on a channel assigned by environment.py
-        (via assign_devices_to_channels). Here we just create the objects;
-        channel assignment happens after environment.py is initialised.
+        Phase 2 change:
+        Instead of treating every device as the same generic sensor,
+        each device now has its own traffic pattern, priority, and
+        interference sensitivity.
         """
+        self.iot_devices.clear()
+
         for i in range(1, config.NUM_IOT_DEVICES + 1):
+            profile = DEVICE_PROFILES[(i - 1) % len(DEVICE_PROFILES)]
+
             device = IoTDevice(
                 device_id=i,
-                channel_id=1,                       # Placeholder — assigned later
+                channel_id=1,  # Placeholder — assigned later by environment.py
                 tx_power_dbm=config.IOT_TX_POWER_DBM,
-                status=DeviceStatus.TRANSMITTING    # All devices start transmitting
+                status=DeviceStatus.TRANSMITTING,
+
+                # Phase 2 profile fields
+                name=profile["name"],
+                traffic_type=profile["traffic_type"],
+                traffic_load=profile["traffic_load"],
+                priority=profile["priority"],
+                packets_per_tick=profile["packets_per_tick"],
+                sensitivity=profile["sensitivity"],
             )
+
             self.iot_devices.append(device)
 
     def _create_interferers(self):
@@ -345,9 +437,6 @@ class DeviceManager:
         environment : ChannelEnvironment
             Passed in so we can read the current packet_loss_rate per channel.
         """
-        PACKETS_PER_TICK = 10   # Each device sends 10 packets per 100ms tick
-                                # = 100 packets/second per device — realistic for
-                                # a sensor sending small data frames
 
         for device in self.iot_devices:
             if device.status == DeviceStatus.SWITCHING:
@@ -360,14 +449,27 @@ class DeviceManager:
 
                 # Bernoulli trial: for each of the 10 packets, roll a random number.
                 # If it's less than loss_rate, the packet is lost.
-                losses = int(self.rng.binomial(n=PACKETS_PER_TICK, p=loss_rate))
+                                # Use each device's own traffic profile.
+                # Example: IP Camera sends more packets than Temperature Sensor.
+                packets_this_tick = device.packets_per_tick
 
-                device.packets_sent += PACKETS_PER_TICK
+                # More sensitive devices are slightly more affected by the same channel loss.
+                # This helps explain why high-priority/burst/video devices degrade first.
+                adjusted_loss_rate = min(1.0, loss_rate * device.sensitivity)
+
+                losses = int(
+                    self.rng.binomial(
+                        n=packets_this_tick,
+                        p=adjusted_loss_rate
+                    )
+                )
+
+                device.packets_sent += packets_this_tick
                 device.packets_lost += losses
 
                 # Update device SINR history and status
                 device.record_sinr(channel_state.sinr_db)
-                device.update_status(channel_state.sinr_db)
+                device.update_status(channel_state.sinr_db, adjusted_loss_rate)
 
     # GETTERS
     def get_device(self, device_id: int) -> Optional[IoTDevice]:

@@ -129,7 +129,12 @@ def run_simulation(algorithm_name: str,
             environment.update(interference_map)
             device_manager.update(environment)
             snapshot = monitor.observe(environment, device_manager, tick)
-
+            
+            # Log the degraded state before ACS switches devices.
+            # This gives the dashboard one visible tick where devices appear as
+            # Interference/Degraded before moving into ACS Recovery.
+            logger.log_tick(snapshot)
+            set_simulation_state(tick=tick)
             for device_id in snapshot.devices_needing_switch:
                 device = device_manager.get_device(device_id)
                 if device is None:
@@ -148,9 +153,7 @@ def run_simulation(algorithm_name: str,
                     print(f"  [Tick {tick:>4}] Device {device_id} → Ch {decision.target_channel}"
                           f"  |  {decision.reason[:60]}")
 
-            logger.log_tick(snapshot)
-            set_simulation_state(tick=tick)
-
+        
             if tick % 50 == 0:
                 pct = (tick / config.TOTAL_TICKS) * 100
                 print(f"  {tick}/{config.TOTAL_TICKS} ({pct:.0f}%)  |  "

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict
 import numpy as np
 import config
+#from simulation import environment
 from simulation.environment import ChannelEnvironment, ChannelState
 from simulation.devices import IoTDevice, DeviceManager
 
@@ -111,10 +112,20 @@ class ThresholdBasedACS(BaseACSAlgorithm):
             )
 
         # STEP 2: Scan all channels and find the one with highest SINR
-        all_channels = environment.get_all_channels()
+        # Consider only channels that are currently not interfered.
+        candidate_channels = [
+            ch for ch in environment.get_all_channels()
+            if not ch.is_interfered
+        ]
 
-        # Sort channels by SINR descending; the first entry is the best.
-        best_channel = max(all_channels, key=lambda ch: ch.sinr_db)
+        # If every channel is interfered, fall back to all channels.
+        if not candidate_channels:
+            candidate_channels = environment.get_all_channels()
+
+        best_channel = max(
+            candidate_channels,
+            key=lambda ch: ch.sinr_db
+        )
 
         # STEP 3: Validate the candidate before committing to a switch
         # Avoid switching to a channel that's barely better than the current one — that would waste a switch (which has its own brief outage
@@ -190,11 +201,17 @@ class WeightedScoringACS(BaseACSAlgorithm):
             utilisation[d.channel_id] = utilisation.get(d.channel_id, 0) + 1
 
         # STEP 3: Score every channel
-        all_channels = environment.get_all_channels()
+        all_channels = [
+            ch
+            for ch in environment.get_all_channels()
+            if ch.sinr_db >= 5
+        ]
+        if not all_channels:
+            all_channels = environment.get_all_channels()
         scored_channels = []
 
         for channel in all_channels:
-            score = self._compute_score(channel, utilisation)
+            score = self._compute_score(channel, utilisation, device)
             scored_channels.append((channel, score))
 
         # Sort descending by score; best candidate is first
@@ -238,7 +255,8 @@ class WeightedScoringACS(BaseACSAlgorithm):
     def _compute_score(
         self,
         channel: ChannelState,
-        utilisation: Dict[int, int]
+        utilisation: Dict[int, int],
+        device: IoTDevice
     ) -> float:
         """
         Compute the composite score for one candidate channel.
@@ -268,14 +286,19 @@ class WeightedScoringACS(BaseACSAlgorithm):
         # Normalised against NUM_IOT_DEVICES so it scales with deployment size.
         devices_on_channel = utilisation.get(channel.channel_id, 0)
         utilisation_penalty = np.clip(
-            devices_on_channel / config.NUM_IOT_DEVICES, 0.0, 1.0
+            devices_on_channel / config.NUM_IOT_DEVICES,
+            0.0,
+            1.0
         )
+
+        
 
         # Combine into final weighted score
         score = (
             (self.WEIGHT_SINR * sinr_score)
             + (self.WEIGHT_STABILITY * stability_score)
             - (self.WEIGHT_UTILISATION * utilisation_penalty)
+            # + priority_bonus
         )
 
         return float(score)

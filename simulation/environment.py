@@ -102,9 +102,18 @@ class ChannelEnvironment:
 
         for ch_id, channel in self.channels.items():
 
-            # STEP 1: Get interference power on this channel
-            # If no interferer is active on this channel, use a very low background noise value so SINR stays high (clean channel).
+            # Read the interference generated for this channel.
             interference_dbm = interference_map.get(ch_id, config.NOISE_FLOOR_DBM)
+
+            # Scale interference gradually so the simulation has visible
+            # degradation instead of jumping instantly between perfect and bad.
+
+            if interference_dbm > config.NOISE_FLOOR_DBM:
+                # Add a small random fluctuation to simulate changing RF conditions.
+                variation = self.rng.normal(0, 2)
+
+                interference_dbm += variation
+
             channel.interference_power_dbm = interference_dbm
 
             # STEP 2: Simulate IoT signal strength (RSSI)
@@ -112,13 +121,23 @@ class ChannelEnvironment:
             # Here we model it as a baseline signal with small random fluctuation (multipath fading / shadowing) — this is standard in RF simulation.
     
             # np.clip ensures RSSI stays within physically realistic bounds.
-            base_rssi = -55.0   # Typical indoor IoT device signal strength (dBm)
-            fading = self.rng.normal(loc=0.0, scale=2.0)   # ±2 dB random fading
-            channel.rssi_dbm = float(np.clip(
-                base_rssi + fading,
-                config.RSSI_MIN_DBM,
-                config.RSSI_MAX_DBM
-            ))
+            # STEP 2: Simulate IoT signal strength (RSSI)
+            # Stronger RSSI on clean channels, weaker RSSI when interference exists.
+
+            if interference_dbm > config.NOISE_FLOOR_DBM:
+                base_rssi = -60.0      # Slightly weaker due to interference
+            else:
+                base_rssi = -53.0      # Stronger on clean channels
+
+            fading = self.rng.normal(loc=0.0, scale=2.0)
+
+            channel.rssi_dbm = float(
+                np.clip(
+                    base_rssi + fading,
+                    config.RSSI_MIN_DBM,
+                    config.RSSI_MAX_DBM
+                )
+            )
 
             # STEP 3: Calculate SINR
             # SINR (dB) = Signal Power - (Interference Power + Noise Floor)
@@ -134,7 +153,13 @@ class ChannelEnvironment:
                 total_interference_mw = 1e-12
 
             sinr_linear = signal_mw / total_interference_mw
-            channel.sinr_db = float(_linear_to_db(sinr_linear))
+            channel.sinr_db = float(
+                np.clip(
+                _linear_to_db(sinr_linear),
+                -5,
+                30
+                )
+            )
 
             # STEP 4: Derive packet loss rate from SINR
             # As SINR drops, packet loss rises non-linearly. We use a sigmoid-based mapping — a common approximation in
@@ -261,7 +286,7 @@ def _sinr_to_packet_loss(sinr_db: float) -> float:
     in your problem statement.
     """
     # Sigmoid centred at SINR_THRESHOLD_DB, scaled to [0, 1]
-    k = 0.3   # Steepness of the curve
+    k = 0.4   # Steepness of the curve
     midpoint = config.SINR_THRESHOLD_DB   # = 10 dB — loss rises sharply here
 
     packet_loss = 1.0 / (1.0 + np.exp(k * (sinr_db - midpoint)))

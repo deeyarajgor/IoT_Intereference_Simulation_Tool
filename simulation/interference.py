@@ -88,26 +88,40 @@ class InterferenceEngine:
     # STEP 2: TIME-BASED SCENARIO RULES (OPTIONAL)
     def _apply_scenario_rules(self, interferers: List[Interferer], current_tick: int):
         """
-        Optionally toggle interferers on/off at specific simulation times.
+        Phase 2 scenario timeline.
 
-        This is useful for your evaluation chapter — e.g. you might want to
-        show "interference starts at tick 50" so the dashboard clearly shows
-        the BEFORE (clean) and AFTER (degraded -> recovered) phases, which
-        makes the ACS recovery behaviour much easier to see and screenshot
-        for your report.
+        This creates a visible simulation story:
 
-        Currently a placeholder — by default everything stays active the
-        whole simulation (self.scenario_active = True does nothing here).
-        You can extend this method later, e.g.:
+        Tick 0–30:
+            Clean network warm-up
 
-            if current_tick == 50:
-                interferers[0].is_active = True   # Wi-Fi #1 switches on
-            if current_tick == 300:
-                interferers[0].is_active = False  # Wi-Fi #1 switches off
+        Tick 31–120:
+            Wi-Fi interference becomes active
+
+        Tick 121 onwards:
+            Bluetooth hopping also becomes active
+
+        This makes the dashboard show:
+        clean → interference → degradation → ACS recovery
         """
-        # No-op by default — all interferers remain active throughout.
-        # This keeps the first working version simple. We can add timed scenarios later once the core pipeline is verified end-to-end.
-        pass
+
+        for interferer in interferers:
+
+            # First 30 ticks: no interference.
+            # This gives the dashboard a clean baseline at the start.
+            if current_tick <= 10:
+                interferer.is_active = False
+
+            # After 30 ticks: Wi-Fi interference starts.
+            elif current_tick <= 120:
+                if interferer.interferer_type == InterfererType.WIFI:
+                    interferer.is_active = True
+                else:
+                    interferer.is_active = False
+
+            # After 120 ticks: both Wi-Fi and Bluetooth are active.
+            else:
+                interferer.is_active = True
 
     # STEP 3: POWER AGGREGATION PER CHANNEL
     def _aggregate_power_per_channel(self, interferers: List[Interferer]) -> Dict[int, float]:
